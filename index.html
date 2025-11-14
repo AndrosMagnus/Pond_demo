@@ -2,7 +2,7 @@
 <html lang="es">
 <head>
   <meta charset="utf-8" />
-  <title>Demo estanques (satelital)</title>
+  <title>Demo estanques (PMTiles + satélite)</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
 
   <!-- MapLibre -->
@@ -62,7 +62,7 @@
 <body>
 <div id="app">
 
-  <!-- Panel izquierdo -->
+  <!-- Panel izquierdo: info del estanque -->
   <div id="left-panel">
     <h2>Estanque seleccionado</h2>
     <p><strong>ID:</strong> –</p>
@@ -78,29 +78,31 @@
     <div id="zoom-info">Acerca el zoom para ver los estanques.</div>
   </div>
 
-  <!-- Panel derecho -->
+  <!-- Panel derecho: filtros (luego los conectamos bien) -->
   <div id="right-panel">
     <h2>Filtro espacial</h2>
 
     <label>País</label>
-    <select>
-      <option>Ecuador</option>
-      <option>Vietnam</option>
-      <option>Thailand</option>
+    <select id="country-select">
+      <option value="">Todos</option>
     </select>
 
     <label>Región</label>
-    <select disabled>
-      <option>–</option>
+    <select id="region-select" disabled>
+      <option value="">–</option>
     </select>
 
     <label>Lugar (place)</label>
-    <select disabled>
-      <option>–</option>
+    <select id="place-select" disabled>
+      <option value="">–</option>
     </select>
 
-    <p style="margin-top:10px;"><strong>Número de estanques:</strong> –</p>
-    <p><strong>Área total (ha):</strong> –</p>
+    <p style="margin-top:10px;">
+      <strong>Número de estanques:</strong> <span id="count-output">–</span>
+    </p>
+    <p>
+      <strong>Área total (ha):</strong> <span id="area-output">–</span>
+    </p>
 
     <button id="reset-view">Reset vista</button>
   </div>
@@ -109,7 +111,7 @@
 
 <script>
   // ---------------------------
-  // 1. Basemap satelital de ESRI
+  // 1. Basemap satelital ESRI
   // ---------------------------
   const satelliteStyle = {
     version: 8,
@@ -143,64 +145,82 @@
   // ---------------------------
 
   const protocol = new pmtiles.Protocol();
-maplibregl.addProtocol("pmtiles", protocol.tile);
+  maplibregl.addProtocol("pmtiles", protocol.tile);
 
-// Como el archivo está en el mismo repo / carpeta:
-const PMTILES_URL = "piscinas.pmtiles";
+  // Usa la URL absoluta del archivo en GitHub Pages
+  const PMTILES_URL = "https://androsmagnus.github.io/Pond_demo/piscinas.pmtiles";
 
-const pmSource = new pmtiles.PMTiles(PMTILES_URL);
-// ¡OJO! Aquí va SOLO el objeto pmSource, sin la URL
-protocol.add(pmSource);
-
+  // Instancia PMTiles y la registramos en el protocolo
+  const pmSource = new pmtiles.PMTiles(PMTILES_URL);
+  protocol.add(pmSource); // ¡OJO! solo el objeto, no la URL
 
   const pondsSourceId  = "estanques";
   const pondsLayerId   = "estanques-fill";
   const pondsOutlineId = "estanques-outline";
 
   map.on("load", async () => {
-    // Leemos el header para saber el nombre de la capa interna
-    const header = await pmSource.getHeader();
-    const layerName = header.name || "layer";
-    console.log("Layer interna en PMTiles:", layerName);
+    try {
+      // Leer header para saber el nombre de la capa interna
+      const header = await pmSource.getHeader();
+      const layerName = header.name || "layer";
+      console.log("Layer interna en PMTiles:", layerName);
 
-    // Fuente vectorial desde PMTiles
-    map.addSource(pondsSourceId, {
-      type: "vector",
-      url: "pmtiles://" + PMTILES_URL
-    });
+      // Fuente vectorial basada en PMTiles
+      map.addSource(pondsSourceId, {
+        type: "vector",
+        url: "pmtiles://" + PMTILES_URL
+      });
 
-    // Capa de relleno de estanques
-    map.addLayer({
-      id: pondsLayerId,
-      type: "fill",
-      source: pondsSourceId,
-      "source-layer": layerName,
-      paint: {
-        "fill-color": "#22c55e",
-        "fill-opacity": 0.45
-      }
-    });
+      // Capa de relleno
+      map.addLayer({
+        id: pondsLayerId,
+        type: "fill",
+        source: pondsSourceId,
+        "source-layer": layerName,
+        paint: {
+          "fill-color": "#22c55e",
+          "fill-opacity": 0.45
+        }
+      });
 
-    // Capa de borde
-    map.addLayer({
-      id: pondsOutlineId,
-      type: "line",
-      source: pondsSourceId,
-      "source-layer": layerName,
-      paint: {
-        "line-color": "#166534",
-        "line-width": 0.8
-      }
-    });
+      // Capa de borde
+      map.addLayer({
+        id: pondsOutlineId,
+        type: "line",
+        source: pondsSourceId,
+        "source-layer": layerName,
+        paint: {
+          "line-color": "#166534",
+          "line-width": 0.8
+        }
+      });
 
-    habilitarInteraccion(layerName);
+      setupInteractions(layerName);
+    } catch (err) {
+      console.error("Error cargando PMTiles:", err);
+      document.getElementById("zoom-info").textContent =
+        "No se pudo cargar piscinas.pmtiles (revisa la URL y el nombre del archivo).";
+    }
   });
 
-  function habilitarInteraccion(layerName) {
-    const leftPanel = document.getElementById("left-panel");
-    const zoomInfo  = document.getElementById("zoom-info");
+  // ---------------------------
+  // 3. Interacción y lectura de atributos desde el PMTiles
+  // ---------------------------
+  function setupInteractions(layerName) {
+    const leftPanel   = document.getElementById("left-panel");
+    const zoomInfo    = document.getElementById("zoom-info");
+    const countOutput = document.getElementById("count-output");
+    const areaOutput  = document.getElementById("area-output");
 
-    // Cursor tipo mano
+    // Helper para buscar un campo entre varios posibles nombres
+    function pickProp(props, candidates, fallback = "–") {
+      for (const c of candidates) {
+        if (props[c] !== undefined && props[c] !== null) return props[c];
+      }
+      return fallback;
+    }
+
+    // Cursor tipo mano sobre estanques
     map.on("mouseenter", pondsLayerId, () => {
       map.getCanvas().style.cursor = "pointer";
     });
@@ -208,26 +228,71 @@ protocol.add(pmSource);
       map.getCanvas().style.cursor = "";
     });
 
-    // Click en estanque → mostrar propiedades
+    // Click en estanque → mostrar info en panel izquierdo
     map.on("click", pondsLayerId, (e) => {
       const feat = e.features && e.features[0];
       if (!feat) return;
       const props = feat.properties || {};
 
+      // Intentamos mapear country / region / place / area desde las props del PMTiles
+      const id     = pickProp(props, ["id", "ID", "pond_id"]);
+      const pais   = pickProp(props, ["country", "COUNTRY", "pais", "PAIS"]);
+      const region = pickProp(props, ["region", "REGION", "provincia", "PROVINCIA", "state"]);
+      const lugar  = pickProp(props, ["place", "PLACE", "parroquia", "PARROQUIA", "cantón", "CANTON", "canton"]);
+      const area   = pickProp(props, ["area_ha", "AREA_HA", "area", "AREA"]);
+
       let html = "<h2>Estanque seleccionado</h2>";
+      html += `<p><strong>ID:</strong> ${id}</p>`;
+      html += `<p><strong>País:</strong> ${pais}</p>`;
+      html += `<p><strong>Región:</strong> ${region}</p>`;
+      html += `<p><strong>Lugar:</strong> ${lugar}</p>`;
+      html += `<p><strong>Área (ha):</strong> ${area}</p>`;
+      html += `<hr style="border-color:#1f2937; margin:8px 0;">`;
+      html += `<p style="font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:#6b7280;">Todas las propiedades del feature</p>`;
+
+      // Debajo mostramos todas las propiedades tal cual vienen del PMTiles (debug útil)
       for (const key in props) {
         html += `<p><strong>${key}:</strong> ${props[key]}</p>`;
       }
+
       leftPanel.innerHTML = html;
     });
 
-    // Mensaje según zoom
-    function actualizarZoomInfo() {
+    // Mostrar / ocultar mensaje según zoom
+    function updateZoomHint() {
       const z = map.getZoom();
       zoomInfo.style.display = z < 8 ? "block" : "none";
     }
-    map.on("moveend", actualizarZoomInfo);
-    actualizarZoomInfo();
+    map.on("moveend", updateZoomHint);
+    updateZoomHint();
+
+    // Cálculo simple de número de estanques y área total visibles (demo)
+    function updateStats() {
+      try {
+        const features = map.querySourceFeatures(pondsSourceId, {
+          sourceLayer: layerName
+        });
+        const count = features.length;
+        let totalArea = 0;
+
+        for (const f of features) {
+          const props = f.properties || {};
+          const a = parseFloat(
+            pickProp(props, ["area_ha", "AREA_HA", "area", "AREA"], "0")
+          );
+          if (!isNaN(a)) totalArea += a;
+        }
+
+        countOutput.textContent = count || "0";
+        areaOutput.textContent = totalArea ? totalArea.toFixed(2) : "0";
+      } catch (e) {
+        // puede fallar si la fuente aún no está lista; no pasa nada
+      }
+    }
+
+    map.on("moveend", updateStats);
+    map.on("load", updateStats);
+    updateStats();
 
     // Botón reset vista
     document.getElementById("reset-view").addEventListener("click", () => {
