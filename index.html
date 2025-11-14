@@ -143,13 +143,15 @@
   // ---------------------------
 
   const protocol = new pmtiles.Protocol();
-  maplibregl.addProtocol("pmtiles", protocol.tile);
+maplibregl.addProtocol("pmtiles", protocol.tile);
 
-  // Como el archivo está en el mismo repo / carpeta:
-  const PMTILES_URL = "piscinas.pmtiles";
+// Como el archivo está en el mismo repo / carpeta:
+const PMTILES_URL = "piscinas.pmtiles";
 
-  const pmSource = new pmtiles.PMTiles(PMTILES_URL);
-  protocol.add(PMTILES_URL, pmSource);
+const pmSource = new pmtiles.PMTiles(PMTILES_URL);
+// ¡OJO! Aquí va SOLO el objeto pmSource, sin la URL
+protocol.add(pmSource);
+
 
   const pondsSourceId  = "estanques";
   const pondsLayerId   = "estanques-fill";
