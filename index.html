@@ -56,6 +56,19 @@
       color: white;
       pointer-events: none;
     }
+    .opacity-control {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      margin-top: 8px;
+    }
+    .opacity-control input[type="range"] {
+      flex: 1;
+    }
+    .opacity-control button {
+      width: auto;
+      padding: 6px 10px;
+    }
   </style>
 </head>
 
@@ -65,11 +78,11 @@
   <!-- Panel izquierdo: info del estanque -->
   <div id="left-panel">
     <h2>Estanque seleccionado</h2>
-    <p><strong>ID:</strong> –</p>
-    <p><strong>País:</strong> –</p>
-    <p><strong>Región:</strong> –</p>
-    <p><strong>Lugar:</strong> –</p>
-    <p><strong>Área (ha):</strong> –</p>
+    <p><strong>ID:</strong> -</p>
+    <p><strong>País:</strong> -</p>
+    <p><strong>Región:</strong> -</p>
+    <p><strong>Lugar:</strong> -</p>
+    <p><strong>Área (ha):</strong> -</p>
   </div>
 
   <!-- Mapa -->
@@ -89,22 +102,38 @@
 
     <label>Región</label>
     <select id="region-select" disabled>
-      <option value="">–</option>
+      <option value="">-</option>
     </select>
 
     <label>Lugar (place)</label>
     <select id="place-select" disabled>
-      <option value="">–</option>
+      <option value="">-</option>
     </select>
 
     <p style="margin-top:10px;">
-      <strong>Número de estanques:</strong> <span id="count-output">–</span>
+      <strong>Número de estanques:</strong> <span id="count-output">-</span>
     </p>
     <p>
       <strong>Área total (ha):</strong> <span id="area-output">–</span>
     </p>
 
     <button id="reset-view">Reset vista</button>
+
+    <label for="fill-opacity" style="margin-top:16px;">Opacidad de estanques</label>
+    <div class="opacity-control">
+      <input
+        id="fill-opacity"
+        type="range"
+        min="10"
+        max="100"
+        step="5"
+        value="45"
+      />
+      <button id="opacity-reset" type="button">Reset</button>
+    </div>
+    <p style="font-size:12px; margin-top:-4px;">
+      Valor actual: <strong><span id="opacity-value">0.45</span></strong>
+    </p>
   </div>
 
 </div>
@@ -133,12 +162,274 @@
     ]
   };
 
+  const defaultView = { center: [-79.9, -2.3], zoom: 6 };
+
   const map = new maplibregl.Map({
     container: "mapContainer",
     style: satelliteStyle,
-    center: [-79.9, -2.3], // Costa de Ecuador
-    zoom: 6
+    center: defaultView.center,
+    zoom: defaultView.zoom
   });
+
+  const countrySelect = document.getElementById("country-select");
+  const regionSelect = document.getElementById("region-select");
+  const placeSelect = document.getElementById("place-select");
+  const countOutput = document.getElementById("count-output");
+  const areaOutput = document.getElementById("area-output");
+  const fillOpacityInput = document.getElementById("fill-opacity");
+  const opacityValueLabel = document.getElementById("opacity-value");
+  const opacityResetBtn = document.getElementById("opacity-reset");
+
+  const filtersState = {
+    countries: {},
+    totals: { count: 0, area: 0 },
+    loaded: false
+  };
+
+  const mapPadding = { top: 40, bottom: 40, left: 320, right: 320 };
+  const defaultFillValue = Number(fillOpacityInput.value);
+  const defaultFillOpacity = defaultFillValue / 100;
+  opacityValueLabel.textContent = defaultFillOpacity.toFixed(2);
+
+  function formatCount(value) {
+    return value?.toLocaleString("es-EC") ?? "0";
+  }
+
+  function formatArea(value) {
+    if (value === undefined || value === null) return "0";
+    return Number(value).toLocaleString("es-EC", {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2
+    });
+  }
+
+  function updateStatsDisplay(stats) {
+    if (!stats) {
+      countOutput.textContent = "-";
+      areaOutput.textContent = "-";
+      return;
+    }
+    countOutput.textContent = formatCount(stats.count);
+    areaOutput.textContent = formatArea(stats.area);
+  }
+
+  function setSelectOptions(selectEl, options, placeholderText) {
+    selectEl.innerHTML = "";
+    const placeholder = document.createElement("option");
+    placeholder.value = "";
+    placeholder.textContent = placeholderText;
+    selectEl.appendChild(placeholder);
+    options.forEach((opt) => {
+      const optionNode = document.createElement("option");
+      optionNode.value = opt.value;
+      optionNode.textContent = opt.label;
+      selectEl.appendChild(optionNode);
+    });
+    selectEl.disabled = options.length === 0;
+  }
+
+  function computeTotals(countries) {
+    const stats = { count: 0, area: 0 };
+    Object.values(countries).forEach((country) => {
+      stats.count += country.count || 0;
+      stats.area += country.area || 0;
+    });
+    return stats;
+  }
+
+  function flyToStats(stats) {
+    if (!stats) return;
+    const run = () => {
+      if (stats.bbox) {
+        const [[minLng, minLat], [maxLng, maxLat]] = [
+          [stats.bbox[0], stats.bbox[1]],
+          [stats.bbox[2], stats.bbox[3]]
+        ];
+        const sameLon = minLng === maxLng;
+        const sameLat = minLat === maxLat;
+        if (!sameLon || !sameLat) {
+          map.fitBounds(
+            [
+              [minLng, minLat],
+              [maxLng, maxLat]
+            ],
+            { padding: mapPadding, duration: 800 }
+          );
+          return;
+        }
+      }
+      if (stats.center) {
+        map.flyTo({ center: stats.center, zoom: Math.max(map.getZoom(), 10) });
+      }
+    };
+    if (map.isStyleLoaded()) {
+      run();
+    } else {
+      map.once("load", run);
+    }
+  }
+
+  function resetFilters(preserveCountryOptions = false) {
+    if (!preserveCountryOptions) {
+      setSelectOptions(countrySelect, [], "Todos");
+    } else {
+      countrySelect.value = "";
+    }
+    setSelectOptions(regionSelect, [], "-");
+    setSelectOptions(placeSelect, [], "-");
+    regionSelect.disabled = true;
+    placeSelect.disabled = true;
+    const stats = filtersState.loaded ? filtersState.totals : null;
+    updateStatsDisplay(stats);
+  }
+
+  resetFilters();
+
+  document.getElementById("reset-view").addEventListener("click", () => {
+    resetFilters(true);
+    map.flyTo(defaultView);
+  });
+
+  function applyFillOpacity(opacity) {
+    const clamped = Math.min(1, Math.max(0, opacity));
+    opacityValueLabel.textContent = clamped.toFixed(2);
+    if (map.getLayer(pondsLayerId)) {
+      map.setPaintProperty(pondsLayerId, "fill-opacity", clamped);
+    }
+  }
+
+  fillOpacityInput.addEventListener("input", (event) => {
+    const value = Number(event.target.value) / 100;
+    applyFillOpacity(value);
+  });
+
+  opacityResetBtn.addEventListener("click", () => {
+    fillOpacityInput.value = String(defaultFillValue);
+    applyFillOpacity(defaultFillOpacity);
+  });
+
+  function getCountryData(name) {
+    if (!name || !filtersState.countries) return null;
+    return filtersState.countries[name] || null;
+  }
+
+  function getRegionData(countryData, regionName) {
+    if (!countryData || !regionName) return null;
+    return (countryData.regions || {})[regionName] || null;
+  }
+
+  function populateCountrySelect() {
+    const entries = Object.keys(filtersState.countries || {})
+      .sort((a, b) => a.localeCompare(b, "es"))
+      .map((name) => ({
+        value: name,
+        label: `${name} (${formatCount(filtersState.countries[name].count)})`
+      }));
+    setSelectOptions(countrySelect, entries, "Todos");
+    countrySelect.disabled = entries.length === 0;
+  }
+
+  function populateRegionSelect(countryData) {
+    const regions = countryData?.regions || {};
+    const entries = Object.keys(regions)
+      .sort((a, b) => a.localeCompare(b, "es"))
+      .map((name) => ({
+        value: name,
+        label: `${name} (${formatCount(regions[name].count)})`
+      }));
+    setSelectOptions(regionSelect, entries, entries.length ? "Todas" : "-");
+    if (!entries.length) {
+      setSelectOptions(placeSelect, [], "-");
+      placeSelect.disabled = true;
+    }
+  }
+
+  function populatePlaceSelect(regionData) {
+    const places = regionData?.places || {};
+    const entries = Object.keys(places)
+      .sort((a, b) => a.localeCompare(b, "es"))
+      .map((name) => ({
+        value: name,
+        label: `${name} (${formatCount(places[name].count)})`
+      }));
+    setSelectOptions(placeSelect, entries, entries.length ? "Todos" : "-");
+  }
+
+  countrySelect.addEventListener("change", () => {
+    if (!filtersState.loaded) return;
+    const countryName = countrySelect.value;
+    const countryData = getCountryData(countryName);
+
+    regionSelect.value = "";
+    placeSelect.value = "";
+    populateRegionSelect(countryData);
+    setSelectOptions(placeSelect, [], "-");
+    placeSelect.disabled = true;
+
+    if (!countryData) {
+      updateStatsDisplay(filtersState.totals);
+      return map.flyTo(defaultView);
+    }
+
+    updateStatsDisplay(countryData);
+    flyToStats(countryData);
+  });
+
+  regionSelect.addEventListener("change", () => {
+    const countryData = getCountryData(countrySelect.value);
+    if (!countryData) return;
+
+    const regionName = regionSelect.value;
+    const regionData = getRegionData(countryData, regionName);
+
+    placeSelect.value = "";
+    populatePlaceSelect(regionData);
+
+    if (!regionData) {
+      updateStatsDisplay(countryData);
+      return flyToStats(countryData);
+    }
+
+    updateStatsDisplay(regionData);
+    flyToStats(regionData);
+  });
+
+  placeSelect.addEventListener("change", () => {
+    const countryData = getCountryData(countrySelect.value);
+    if (!countryData) return;
+    const regionData = getRegionData(countryData, regionSelect.value);
+    if (!regionData) return;
+
+    const placeName = placeSelect.value;
+    if (!placeName) {
+      updateStatsDisplay(regionData);
+      return flyToStats(regionData);
+    }
+
+    const placeData = (regionData.places || {})[placeName];
+    if (!placeData) return;
+
+    updateStatsDisplay(placeData);
+    flyToStats(placeData);
+  });
+
+  fetch("pond_filters.json")
+    .then((resp) => {
+      if (!resp.ok) throw new Error("No se pudo leer pond_filters.json");
+      return resp.json();
+    })
+    .then((data) => {
+      filtersState.countries = data.countries || {};
+      filtersState.totals = computeTotals(filtersState.countries);
+      filtersState.loaded = true;
+      populateCountrySelect();
+      resetFilters(true);
+      updateStatsDisplay(filtersState.totals);
+    })
+    .catch((err) => {
+      console.error("Error cargando filtros:", err);
+      updateStatsDisplay(null);
+    });
 
   // ---------------------------
   // 2. Cargar piscinas.pmtiles
@@ -162,8 +453,23 @@
     try {
       // Leer header para saber el nombre de la capa interna
       const header = await pmSource.getHeader();
-      const layerName = header.name || "layer";
-      console.log("Layer interna en PMTiles:", layerName);
+      let layerName = (header && header.name) || null;
+
+      // Algunos PMTiles no rellenan header.name, asi que consultamos el metadata
+      try {
+        const metadata = await pmSource.getMetadata();
+        const vectorLayers = metadata?.vector_layers || metadata?.layers;
+        if (Array.isArray(vectorLayers) && vectorLayers.length > 0) {
+          layerName = vectorLayers[0].id || layerName;
+        }
+      } catch (metadataErr) {
+        console.warn("No se pudo leer metadata de PMTiles:", metadataErr);
+      }
+
+      if (!layerName) {
+        layerName = "layer";
+      }
+      console.log("Capa interna usada en PMTiles:", layerName);
 
       // Fuente vectorial basada en PMTiles
       map.addSource(pondsSourceId, {
@@ -178,8 +484,8 @@
         source: pondsSourceId,
         "source-layer": layerName,
         paint: {
-          "fill-color": "#22c55e",
-          "fill-opacity": 0.45
+          "fill-color": "#f97316",
+          "fill-opacity": defaultFillOpacity
         }
       });
 
@@ -190,11 +496,12 @@
         source: pondsSourceId,
         "source-layer": layerName,
         paint: {
-          "line-color": "#166534",
+          "line-color": "#c2410c",
           "line-width": 0.8
         }
       });
 
+      applyFillOpacity(Number(fillOpacityInput.value) / 100);
       setupInteractions(layerName);
     } catch (err) {
       console.error("Error cargando PMTiles:", err);
@@ -206,21 +513,19 @@
   // ---------------------------
   // 3. Interacción y lectura de atributos desde el PMTiles
   // ---------------------------
-  function setupInteractions(layerName) {
-    const leftPanel   = document.getElementById("left-panel");
-    const zoomInfo    = document.getElementById("zoom-info");
-    const countOutput = document.getElementById("count-output");
-    const areaOutput  = document.getElementById("area-output");
+    function setupInteractions(layerName) {
+    const leftPanel = document.getElementById("left-panel");
+    const zoomInfo = document.getElementById("zoom-info");
 
-    // Helper para buscar un campo entre varios posibles nombres
-    function pickProp(props, candidates, fallback = "–") {
+    function pickProp(props, candidates, fallback = "-") {
       for (const c of candidates) {
-        if (props[c] !== undefined && props[c] !== null) return props[c];
+        if (props[c] !== undefined && props[c] !== null) {
+          return props[c];
+        }
       }
       return fallback;
     }
 
-    // Cursor tipo mano sobre estanques
     map.on("mouseenter", pondsLayerId, () => {
       map.getCanvas().style.cursor = "pointer";
     });
@@ -228,18 +533,16 @@
       map.getCanvas().style.cursor = "";
     });
 
-    // Click en estanque → mostrar info en panel izquierdo
     map.on("click", pondsLayerId, (e) => {
       const feat = e.features && e.features[0];
       if (!feat) return;
       const props = feat.properties || {};
 
-      // Intentamos mapear country / region / place / area desde las props del PMTiles
-      const id     = pickProp(props, ["id", "ID", "pond_id"]);
-      const pais   = pickProp(props, ["country", "COUNTRY", "pais", "PAIS"]);
+      const id = pickProp(props, ["id", "ID", "pond_id"]);
+      const pais = pickProp(props, ["country", "COUNTRY", "pais", "PAIS"]);
       const region = pickProp(props, ["region", "REGION", "provincia", "PROVINCIA", "state"]);
-      const lugar  = pickProp(props, ["place", "PLACE", "parroquia", "PARROQUIA", "cantón", "CANTON", "canton"]);
-      const area   = pickProp(props, ["area_ha", "AREA_HA", "area", "AREA"]);
+      const lugar = pickProp(props, ["place", "PLACE", "parroquia", "PARROQUIA", "canton", "CANTON"]);
+      const area = pickProp(props, ["area_ha", "AREA_HA", "area", "AREA"]);
 
       let html = "<h2>Estanque seleccionado</h2>";
       html += `<p><strong>ID:</strong> ${id}</p>`;
@@ -250,7 +553,6 @@
       html += `<hr style="border-color:#1f2937; margin:8px 0;">`;
       html += `<p style="font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:#6b7280;">Todas las propiedades del feature</p>`;
 
-      // Debajo mostramos todas las propiedades tal cual vienen del PMTiles (debug útil)
       for (const key in props) {
         html += `<p><strong>${key}:</strong> ${props[key]}</p>`;
       }
@@ -258,47 +560,14 @@
       leftPanel.innerHTML = html;
     });
 
-    // Mostrar / ocultar mensaje según zoom
     function updateZoomHint() {
       const z = map.getZoom();
       zoomInfo.style.display = z < 8 ? "block" : "none";
     }
     map.on("moveend", updateZoomHint);
     updateZoomHint();
-
-    // Cálculo simple de número de estanques y área total visibles (demo)
-    function updateStats() {
-      try {
-        const features = map.querySourceFeatures(pondsSourceId, {
-          sourceLayer: layerName
-        });
-        const count = features.length;
-        let totalArea = 0;
-
-        for (const f of features) {
-          const props = f.properties || {};
-          const a = parseFloat(
-            pickProp(props, ["area_ha", "AREA_HA", "area", "AREA"], "0")
-          );
-          if (!isNaN(a)) totalArea += a;
-        }
-
-        countOutput.textContent = count || "0";
-        areaOutput.textContent = totalArea ? totalArea.toFixed(2) : "0";
-      } catch (e) {
-        // puede fallar si la fuente aún no está lista; no pasa nada
-      }
-    }
-
-    map.on("moveend", updateStats);
-    map.on("load", updateStats);
-    updateStats();
-
-    // Botón reset vista
-    document.getElementById("reset-view").addEventListener("click", () => {
-      map.flyTo({ center: [-79.9, -2.3], zoom: 6 });
-    });
   }
+
 </script>
 
 </body>
