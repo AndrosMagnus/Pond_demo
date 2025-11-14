@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <title>Demo estanques (satelital)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <!-- MapLibre -->
+  <link href="https://unpkg.com/maplibre-gl@3.6.1/dist/maplibre-gl.css" rel="stylesheet" />
+  <script src="https://unpkg.com/maplibre-gl@3.6.1/dist/maplibre-gl.js"></script>
+
+  <style>
+    html, body {
+      margin: 0; padding: 0; height: 100%;
+      background: #020617;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    #app {
+      display: grid;
+      grid-template-columns: 280px 1fr 280px;
+      height: 100vh;
+    }
+    #left-panel, #right-panel {
+      background: #020617;
+      padding: 12px;
+      color: #e5e7eb;
+      border-right: 1px solid #1f2937;
+      overflow-y: auto;
+    }
+    #right-panel { border-right: 0; border-left: 1px solid #1f2937; }
+    h2 { margin: 0 0 10px 0; font-size: 15px; color: #f9fafb; }
+    p { margin: 0 0 6px 0; font-size: 13px; color: #9ca3af; }
+    label {
+      display: block; margin-top: 8px; margin-bottom: 3px;
+      font-size: 11px; text-transform: uppercase;
+      color: #9ca3af; letter-spacing: 0.05em;
+    }
+    select, button {
+      width: 100%; padding: 6px;
+      border-radius: 6px; margin-bottom: 8px;
+      border: 1px solid #4b5563; background: #020617;
+      color: #e5e7eb; font-size: 13px;
+    }
+    button:hover { background: #111827; cursor: pointer; }
+    #mapContainer { width: 100%; height: 100%; }
+    #zoom-info {
+      position: absolute;
+      left: 10px; bottom: 10px;
+      background: rgba(15,23,42,0.9);
+      padding: 4px 8px;
+      font-size: 12px;
+      border-radius: 4px;
+      color: white;
+      pointer-events: none;
+    }
+  </style>
+</head>
+
+<body>
+<div id="app">
+
+  <!-- Panel izquierdo -->
+  <div id="left-panel">
+    <h2>Estanque seleccionado</h2>
+    <p><strong>ID:</strong> –</p>
+    <p><strong>País:</strong> –</p>
+    <p><strong>Región:</strong> –</p>
+    <p><strong>Lugar:</strong> –</p>
+    <p><strong>Área (ha):</strong> –</p>
+  </div>
+
+  <!-- Mapa -->
+  <div id="map" style="position:relative;">
+    <div id="mapContainer"></div>
+    <div id="zoom-info">Acerca el zoom para ver los estanques (cuando los carguemos).</div>
+  </div>
+
+  <!-- Panel derecho -->
+  <div id="right-panel">
+    <h2>Filtro espacial</h2>
+
+    <label>País</label>
+    <select>
+      <option>Ecuador</option>
+      <option>Vietnam</option>
+      <option>Thailand</option>
+    </select>
+
+    <label>Región</label>
+    <select disabled>
+      <option>–</option>
+    </select>
+
+    <label>Lugar (place)</label>
+    <select disabled>
+      <option>–</option>
+    </select>
+
+    <p style="margin-top:10px;"><strong>Número de estanques:</strong> –</p>
+    <p><strong>Área total (ha):</strong> –</p>
+
+    <button>Reset vista</button>
+  </div>
+
+</div>
+
+<script>
+  // Estilo satelital de ESRI como basemap
+  const satelliteStyle = {
+    version: 8,
+    sources: {
+      esri_satellite: {
+        type: "raster",
+        tiles: [
+          "https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
+        ],
+        tileSize: 256
+      }
+    },
+    layers: [
+      {
+        id: "esri_satellite",
+        type: "raster",
+        source: "esri_satellite"
+      }
+    ]
+  };
+
+  const map = new maplibregl.Map({
+    container: "mapContainer",
+    style: satelliteStyle,
+    center: [-79.9, -2.3], // Costa de Ecuador
+    zoom: 6
+  });
+</script>
+
+</body>
+</html>
