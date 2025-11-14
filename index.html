@@ -9,6 +9,9 @@
   <link href="https://unpkg.com/maplibre-gl@5.12.0/dist/maplibre-gl.css" rel="stylesheet" />
   <script src="https://unpkg.com/maplibre-gl@5.12.0/dist/maplibre-gl.js"></script>
 
+  <!-- PMTiles -->
+  <script src="https://unpkg.com/pmtiles@3.0.6/dist/pmtiles.js"></script>
+
   <style>
     html, body {
       margin: 0; padding: 0; height: 100%;
@@ -72,7 +75,7 @@
   <!-- Mapa -->
   <div id="map" style="position:relative;">
     <div id="mapContainer"></div>
-    <div id="zoom-info">Acerca el zoom para ver los estanques (cuando los carguemos).</div>
+    <div id="zoom-info">Acerca el zoom para ver los estanques.</div>
   </div>
 
   <!-- Panel derecho -->
@@ -99,13 +102,15 @@
     <p style="margin-top:10px;"><strong>Número de estanques:</strong> –</p>
     <p><strong>Área total (ha):</strong> –</p>
 
-    <button>Reset vista</button>
+    <button id="reset-view">Reset vista</button>
   </div>
 
 </div>
 
 <script>
-  // Estilo satelital de ESRI como basemap
+  // ---------------------------
+  // 1. Basemap satelital de ESRI
+  // ---------------------------
   const satelliteStyle = {
     version: 8,
     sources: {
@@ -132,6 +137,101 @@
     center: [-79.9, -2.3], // Costa de Ecuador
     zoom: 6
   });
+
+  // ---------------------------
+  // 2. Cargar piscinas.pmtiles
+  // ---------------------------
+
+  const protocol = new pmtiles.Protocol();
+  maplibregl.addProtocol("pmtiles", protocol.tile);
+
+  // Como el archivo está en el mismo repo / carpeta:
+  const PMTILES_URL = "piscinas.pmtiles";
+
+  const pmSource = new pmtiles.PMTiles(PMTILES_URL);
+  protocol.add(PMTILES_URL, pmSource);
+
+  const pondsSourceId  = "estanques";
+  const pondsLayerId   = "estanques-fill";
+  const pondsOutlineId = "estanques-outline";
+
+  map.on("load", async () => {
+    // Leemos el header para saber el nombre de la capa interna
+    const header = await pmSource.getHeader();
+    const layerName = header.name || "layer";
+    console.log("Layer interna en PMTiles:", layerName);
+
+    // Fuente vectorial desde PMTiles
+    map.addSource(pondsSourceId, {
+      type: "vector",
+      url: "pmtiles://" + PMTILES_URL
+    });
+
+    // Capa de relleno de estanques
+    map.addLayer({
+      id: pondsLayerId,
+      type: "fill",
+      source: pondsSourceId,
+      "source-layer": layerName,
+      paint: {
+        "fill-color": "#22c55e",
+        "fill-opacity": 0.45
+      }
+    });
+
+    // Capa de borde
+    map.addLayer({
+      id: pondsOutlineId,
+      type: "line",
+      source: pondsSourceId,
+      "source-layer": layerName,
+      paint: {
+        "line-color": "#166534",
+        "line-width": 0.8
+      }
+    });
+
+    habilitarInteraccion(layerName);
+  });
+
+  function habilitarInteraccion(layerName) {
+    const leftPanel = document.getElementById("left-panel");
+    const zoomInfo  = document.getElementById("zoom-info");
+
+    // Cursor tipo mano
+    map.on("mouseenter", pondsLayerId, () => {
+      map.getCanvas().style.cursor = "pointer";
+    });
+    map.on("mouseleave", pondsLayerId, () => {
+      map.getCanvas().style.cursor = "";
+    });
+
+    // Click en estanque → mostrar propiedades
+    map.on("click", pondsLayerId, (e) => {
+      const feat = e.features && e.features[0];
+      if (!feat) return;
+      const props = feat.properties || {};
+
+      let html = "<h2>Estanque seleccionado</h2>";
+      for (const key in props) {
+        html += `<p><strong>${key}:</strong> ${props[key]}</p>`;
+      }
+      leftPanel.innerHTML = html;
+    });
+
+    // Mensaje según zoom
+    function actualizarZoomInfo() {
+      const z = map.getZoom();
+      zoomInfo.style.display = z < 8 ? "block" : "none";
+    }
+    map.on("moveend", actualizarZoomInfo);
+    actualizarZoomInfo();
+
+    // Botón reset vista
+    document.getElementById("reset-view").addEventListener("click", () => {
+      map.flyTo({ center: [-79.9, -2.3], zoom: 6 });
+    });
+  }
 </script>
 
 </body>
